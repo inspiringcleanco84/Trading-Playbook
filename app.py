@@ -77,7 +77,8 @@ with tab_playbook:
         st.stop()
 
     st.title("📊 Daily Trading Playbook")
-    st.caption(f"{data.get('day', '')}, {data.get('date', '')} | {data.get('phase', '')} | Last update: {data.get('updated', '?')}")
+    st.caption(f"{data.get('day', '')}, {data.get('date', '')} | {data.get('phase', '')}")
+    st.markdown(f'<div style="text-align:right;color:#9ca3af;font-size:0.85em;margin-top:-10px;">Last Updated: <b>{data.get("updated", "?")}</b></div>', unsafe_allow_html=True)
 
     # Metrics row
     c1, c2, c3, c4, c5, c6 = st.columns(6)
