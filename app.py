@@ -221,16 +221,16 @@ the more capital we deploy. When signals conflict, we size down or sit out entir
 
     st.markdown("""
 <div class="how-section">
-<div class="how-header">Scoring System: 0-11 Points</div>
+<div class="how-header">Scoring System: 0-12 Points</div>
 
 The total score determines whether we trade, how many accounts we deploy, and how aggressively we size.
 
 | Component | Max Points | What It Measures |
 |-----------|-----------|-----------------|
-| **Set's Bias** | 5 | Discretionary trader's directional call + conviction level |
-| **Jay's Bias** | 2 | Second discretionary trader's call for confirmation |
+| **Set's Bias** | 4 | Discretionary trader's directional call + conviction level |
+| **Jay's Bias** | 4 | VP bias (0-2) + DOM sentiment (0-2) |
 | **Technicals** | 4 | Bollinger Band regime (0-3) + EMA structure (0-1) |
-| **Total** | **11** | Combined confluence score |
+| **Total** | **12** | Combined confluence score |
 
 **Score Tiers:**
 - **9+** = ELITE -- max deployment, highest conviction
@@ -242,13 +242,13 @@ The total score determines whether we trade, how many accounts we deploy, and ho
 
     st.markdown("""
 <div class="how-section">
-<div class="how-header">Set's Bias (0-5 points)</div>
+<div class="how-header">Set's Bias (0-4 points)</div>
 
 Set (@Adaamset) is an ES futures trader who posts weekly bias updates on Substack with key levels,
 plus real-time Discord journal entries during the session.
 
 **How he scores:**
-- Base: conviction level (High=3, Med=2, Low=1)
+- Base: conviction level (High=2, Med=1, Low=0)
 - +1 if his Discord journal is active (real-time confirmation)
 - +1 for high-conviction keywords: "Large Orders", "Full Clip", "Gone Shopping", "Pyramiding"
 
@@ -271,16 +271,23 @@ Over 2 years: 65.6% win rate, 1.98 win/loss ratio on 1,704 journal entries acros
 
     st.markdown("""
 <div class="how-section">
-<div class="how-header">Jay's Bias (0-2 points)</div>
+<div class="how-header">Jay's Bias (0-4 points)</div>
 
-Jay is a second discretionary futures trader. His calls provide independent confirmation of direction.
+Jay is a second discretionary futures trader who reads Volume Profiles pre-market and watches
+the DOM (Depth of Market) intraday for sentiment shifts. He provides exact entry levels.
 
-**How he scores:**
-- High conviction = 2 points
-- Med/Low conviction = 1 point
+**Two independent inputs, each scored 0-2:**
+
+| Input | What It Is | Scoring |
+|-------|-----------|---------|
+| **VP Bias** | Pre-market Volume Profile read (Bull/Bear/Balance/Neutral) | High=2, Med=1, Low=0 |
+| **DOM Sentiment** | Intraday DOM read, can confirm or shift his bias | High=2, Med=1, Low=0 |
+
+When both inputs align with high conviction, Jay scores 4/4 — a very strong independent signal.
+When they diverge (bullish VP but bearish DOM), the score reflects that uncertainty.
 
 **Why Jay is always eligible:** Unlike Set trades (which need score 7+), Jay's scalp trades are
-always shown when he has a directional call with med+ conviction. His style is fast in/out scalps
+always shown when he has a directional call with any conviction. His style is fast in/out scalps
 at specific levels, which can work independently of the broader confluence picture.
 
 Jay's key levels feed into the Level Map with weight 2, contributing to zone clustering.
