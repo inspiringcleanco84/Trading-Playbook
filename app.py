@@ -62,7 +62,7 @@ def fetch_playbook():
 # ============================================================
 # TABS
 # ============================================================
-tab_playbook, tab_how = st.tabs(["📊 Live Playbook", "📖 How It Works"])
+tab_playbook, tab_accounts, tab_how = st.tabs(["📊 Live Playbook", "💼 My Accounts", "📖 How It Works"])
 
 
 # ============================================================
@@ -199,7 +199,201 @@ with tab_playbook:
 
 
 # ============================================================
-# TAB 2: HOW IT WORKS
+# TAB 2: MY ACCOUNTS
+# ============================================================
+with tab_accounts:
+    st.title("💼 My Accounts")
+    st.caption("Add your prop/eval accounts to get personalized deployment recommendations based on today's playbook score.")
+
+    # Initialize session state for accounts
+    if "user_accounts" not in st.session_state:
+        st.session_state.user_accounts = []
+
+    # Add account form
+    with st.expander("➕ Add Account", expanded=len(st.session_state.user_accounts) == 0):
+        with st.form("add_account", clear_on_submit=True):
+            c1, c2, c3 = st.columns(3)
+            with c1:
+                acct_name = st.text_input("Account Name", placeholder="e.g. Apex 150K #1, TopStep 50K")
+            with c2:
+                dd_type = st.selectbox("Drawdown Type", ["EOD (End of Day)", "Intraday (Real-Time)"])
+            with c3:
+                dd_amount = st.number_input("Drawdown Remaining ($)", min_value=0, max_value=50000, step=100, value=2000)
+            add_clicked = st.form_submit_button("Add Account", type="primary")
+            if add_clicked and acct_name:
+                st.session_state.user_accounts.append({
+                    "name": acct_name,
+                    "dd_type": "EOD" if "EOD" in dd_type else "Intraday",
+                    "dd_remaining": dd_amount,
+                })
+                st.rerun()
+
+    if not st.session_state.user_accounts:
+        st.info("Add your accounts above to see deployment recommendations.")
+    else:
+        # Display accounts with remove buttons
+        st.markdown("### Your Accounts")
+        for i, acct in enumerate(st.session_state.user_accounts):
+            pct = acct["dd_remaining"] / max(acct["dd_remaining"], 1) * 100  # relative to itself
+            dd_icon = "🕐" if acct["dd_type"] == "EOD" else "⚡"
+            c1, c2, c3, c4 = st.columns([3, 2, 2, 1])
+            with c1:
+                st.markdown(f"**{acct['name']}**")
+            with c2:
+                st.markdown(f"{dd_icon} {acct['dd_type']} DD")
+            with c3:
+                st.markdown(f"${acct['dd_remaining']:,.0f} remaining")
+            with c4:
+                if st.button("❌", key=f"rm_{i}"):
+                    st.session_state.user_accounts.pop(i)
+                    st.rerun()
+
+        st.divider()
+
+        # ---- DEPLOYMENT RECOMMENDATION ----
+        data = fetch_playbook()
+        if not data:
+            st.warning("Playbook not loaded yet — deployment recommendations will appear when the session is active.")
+        else:
+            total = data.get("total_score", 0)
+            bb_regime = data.get("bb_regime", "UNKNOWN")
+            bb_signal = data.get("bb_orb_signal", "SKIP")
+            ema_structure = data.get("ema_structure", "UNKNOWN")
+            dom_bias = data.get("dom_bias", "neutral")
+
+            st.markdown(f"### Deployment Recommendation — Score {total}/12")
+
+            # DD safety thresholds
+            DD_FROZEN = 0.25     # below 25% of original = frozen
+            DD_DANGER = 0.40     # below 40% = danger
+            DD_CAUTION = 0.60    # below 60% = caution
+
+            # Estimate original DD from remaining (conservative: assume healthy account)
+            # Since we don't know original DD, use tiers based on absolute $ remaining
+            # Intraday DD is more restrictive: tighter stops, less room for error
+
+            accounts_analysis = []
+            for acct in st.session_state.user_accounts:
+                dd = acct["dd_remaining"]
+                dd_type = acct["dd_type"]
+
+                # Risk per trade: 20% of remaining DD
+                max_risk = dd * 0.20
+
+                # Contract sizing based on trade type
+                # ORB: ~20pt stop * $5/pt = $100/ct
+                orb_stop_cost = 20 * 5  # $100 per contract
+                orb_cts = max(1, int(max_risk / orb_stop_cost))
+
+                # Set trade: ~15pt stop * $5/pt = $75/ct
+                set_stop_cost = 15 * 5  # $75 per contract
+                set_cts = max(1, int(max_risk / set_stop_cost))
+
+                # Jay scalp: ~4pt stop * $5/pt = $20/ct
+                jay_stop_cost = 4 * 5  # $20 per contract
+                jay_cts = max(1, int(max_risk / jay_stop_cost))
+
+                # Status
+                if dd < 200:
+                    status = "FROZEN"
+                    status_css = "score-skip"
+                    status_icon = "⛔"
+                    reason = "DD too low — protect this account"
+                elif dd < 500:
+                    status = "DANGER"
+                    status_css = "score-skip"
+                    status_icon = "🔴"
+                    reason = "Minimal DD — elite setups only (score 9+)"
+                elif dd < 1000:
+                    status = "CAUTION"
+                    status_css = "score-low"
+                    status_icon = "⚠️"
+                    reason = "Reduced size — good setups only (score 7+)"
+                else:
+                    status = "HEALTHY"
+                    status_css = "score-high" if total >= 7 else "score-med"
+                    status_icon = "✅"
+                    reason = "Full deployment available"
+
+                # Intraday DD adjustment
+                intraday_note = ""
+                if dd_type == "Intraday":
+                    orb_cts = max(1, orb_cts - 1)  # reduce by 1 for tighter leash
+                    set_cts = max(1, set_cts - 1)
+                    intraday_note = " (Intraday DD: sized down -1ct)"
+
+                # Score gating
+                eligible_trades = []
+                if status == "FROZEN":
+                    eligible_trades.append("No trades — account frozen")
+                else:
+                    if status == "DANGER" and total < 9:
+                        eligible_trades.append("No trades — need score 9+ at this DD level")
+                    elif status == "CAUTION" and total < 7:
+                        eligible_trades.append("No trades — need score 7+ at this DD level")
+                    else:
+                        if data.get("orb_eligible"):
+                            eligible_trades.append(f"ORB: {orb_cts}ct MES (${orb_cts * orb_stop_cost} risk)")
+                        if data.get("set_eligible"):
+                            eligible_trades.append(f"Set Trade: {set_cts}ct MES (${set_cts * set_stop_cost} risk)")
+                        if data.get("jay_eligible"):
+                            eligible_trades.append(f"Jay Scalp: {jay_cts}ct MES (${jay_cts * jay_stop_cost} risk)")
+                        if not eligible_trades:
+                            eligible_trades.append("No trades eligible today (check playbook)")
+
+                accounts_analysis.append({
+                    "acct": acct,
+                    "status": status,
+                    "status_css": status_css,
+                    "status_icon": status_icon,
+                    "reason": reason,
+                    "eligible_trades": eligible_trades,
+                    "orb_cts": orb_cts,
+                    "set_cts": set_cts,
+                    "jay_cts": jay_cts,
+                    "intraday_note": intraday_note,
+                })
+
+            # Render deployment cards
+            for a in accounts_analysis:
+                acct = a["acct"]
+                dd_icon = "🕐" if acct["dd_type"] == "EOD" else "⚡"
+                trades_html = "<br>".join([f"&nbsp;&nbsp;- {t}" for t in a["eligible_trades"]])
+
+                st.markdown(f"""<div class="{a['status_css']}">
+                    <b>{a['status_icon']} {acct['name']}</b> — {dd_icon} {acct['dd_type']} DD | ${acct['dd_remaining']:,.0f} remaining | Status: <b>{a['status']}</b>{a['intraday_note']}<br>
+                    <span style="font-size:0.9em;color:#9ca3af;">{a['reason']}</span><br>
+                    <div style="margin-top:8px;font-size:0.9em;">
+                    <b>Today's Trades:</b><br>{trades_html}
+                    </div>
+                </div>""", unsafe_allow_html=True)
+
+            # Summary
+            st.divider()
+            active_count = sum(1 for a in accounts_analysis if a["status"] not in ["FROZEN", "DANGER"] or (a["status"] == "DANGER" and total >= 9) or (a["status"] == "CAUTION" and total >= 7))
+            total_orb_cts = sum(a["orb_cts"] for a in accounts_analysis if a["status"] not in ["FROZEN"] and not (a["status"] == "DANGER" and total < 9) and not (a["status"] == "CAUTION" and total < 7))
+            total_dd = sum(a["acct"]["dd_remaining"] for a in accounts_analysis)
+
+            c1, c2, c3 = st.columns(3)
+            with c1:
+                st.metric("Accounts Eligible", f"{active_count}/{len(st.session_state.user_accounts)}")
+            with c2:
+                st.metric("Total DD Remaining", f"${total_dd:,.0f}")
+            with c3:
+                st.metric("Today's Score", f"{total}/12")
+
+            st.markdown("""
+            <div style="background:#111827;border:1px solid #1f2937;border-radius:8px;padding:12px;margin-top:8px;font-size:0.85em;color:#9ca3af;">
+            <b>How this works:</b> Each account gets sized independently based on its remaining drawdown.
+            Max risk per trade = 20% of remaining DD. Intraday DD accounts get sized down by 1 contract
+            for safety (real-time DD means you can get pulled mid-trade). Accounts below $200 DD are frozen.
+            Below $500 = only elite (9+) setups. Below $1,000 = only good (7+) setups.
+            </div>
+            """, unsafe_allow_html=True)
+
+
+# ============================================================
+# TAB 3: HOW IT WORKS
 # ============================================================
 with tab_how:
     st.title("How This System Works")
