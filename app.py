@@ -69,35 +69,76 @@ def zone_stars(z):
 
 
 # ============================================================
-# Risk allocation logic (matches dashboard_v2.py)
+# Risk allocation logic — uses user's account DD
 # ============================================================
-RISK_BUDGETS = {"orb": 500, "set": 500, "jay": 500}
-TF_SPLIT = 0.72
-TS_SPLIT = 0.28
+RISK_PCT = 0.10  # 10% of remaining DD per trade idea (conservative baseline)
 
-def calc_risk_allocation(bucket, score, conviction):
-    base = RISK_BUDGETS.get(bucket, 500)
-    if score >= 8: sc = 1.0
-    elif score >= 6: sc = 0.7
-    elif score >= 4: sc = 0.5
-    else: sc = 0.3
-    cv = {"high": 1.0, "med": 0.7, "low": 0.4}.get(conviction, 0.4)
-    total = int(base * sc * cv)
-    tf = int(total * TF_SPLIT)
-    ts = total - tf
-    return total, tf, ts
+def score_mult(score):
+    if score >= 8: return 1.0
+    if score >= 6: return 0.7
+    if score >= 4: return 0.5
+    return 0.3
 
-def render_risk_deploy(total, tf, ts):
+def conv_mult(conviction):
+    return {"high": 1.0, "med": 0.7, "low": 0.4}.get(conviction, 0.4)
+
+def calc_account_risk(accounts, score, conviction):
+    """Calculate per-account risk from DD. Returns list of (acct, risk_$)."""
+    sm = score_mult(score)
+    cm = conv_mult(conviction)
+    results = []
+    for a in accounts:
+        dd = a.get("dd_remaining", 0)
+        if dd <= 0:
+            continue
+        # DD safety gating
+        if dd < 200:
+            results.append((a, 0, "FROZEN"))
+            continue
+        if dd < 500 and score < 9:
+            results.append((a, 0, "DANGER (need 9+)"))
+            continue
+        base = dd * RISK_PCT
+        risk = int(base * sm * cm)
+        results.append((a, risk, "OK"))
+    return results
+
+def render_risk_deploy_accounts(acct_risks):
+    """Render per-account risk deployment HTML."""
+    if not acct_risks:
+        return ('<div style="margin-top:8px;padding:10px;background:#1e293b;border-radius:6px;'
+                'font-size:0.9em;color:#9ca3af;text-align:center;">'
+                'Please input account data in the <b>My Accounts</b> tab for deployment recommendations</div>')
+    active = [(a, r, s) for a, r, s in acct_risks if r > 0]
+    frozen = [(a, r, s) for a, r, s in acct_risks if r == 0]
+    total_risk = sum(r for _, r, _ in active)
+    if not active and frozen:
+        reasons = ", ".join([f"{a['name']}: {s}" for a, _, s in frozen])
+        return (f'<div style="margin-top:8px;padding:8px;background:#7f1d1d;border-radius:6px;font-size:0.9em;">'
+                f'<b>RISK DEPLOYMENT:</b> $0 -- all accounts gated<br>'
+                f'<span style="color:#fca5a5;">{reasons}</span></div>')
+    lines = []
+    for a, r, s in active:
+        icon = {"Tradeify": "🟠", "TopStepX": "🔵"}.get(a.get("provider", ""), "⚪")
+        lines.append(f"&nbsp;&nbsp;{icon} <b>{a['name']}:</b> ${r} risk (DD: ${a['dd_remaining']:,.0f})")
+    for a, r, s in frozen:
+        lines.append(f"&nbsp;&nbsp;⛔ <b>{a['name']}:</b> {s}")
+    body = "<br>".join(lines)
     return (f'<div style="margin-top:8px;padding:8px;background:#1e293b;border-radius:6px;font-size:0.9em;">'
-            f'<b>RISK DEPLOYMENT:</b> ${total} total<br>'
-            f'&nbsp;&nbsp;🟠 <b>Tradeify:</b> ${tf} risk&nbsp;&nbsp;|&nbsp;&nbsp;'
-            f'🔵 <b>TopStepX:</b> ${ts} risk</div>')
+            f'<b>RISK DEPLOYMENT:</b> ${total_risk} total across {len(active)} account(s)<br>'
+            f'{body}</div>')
 
+
+# ============================================================
+# ACCOUNTS — session state, persists across reruns
+# ============================================================
+if "user_accounts" not in st.session_state:
+    st.session_state.user_accounts = []
 
 # ============================================================
 # TABS
 # ============================================================
-tab_playbook, tab_how = st.tabs(["📊 Live Playbook", "📖 How It Works"])
+tab_playbook, tab_accounts, tab_how = st.tabs(["📊 Live Playbook", "💼 My Accounts", "📖 How It Works"])
 
 
 # ============================================================
@@ -170,6 +211,10 @@ with tab_playbook:
     deploy_css = "score-high" if n_active >= 5 else ("score-med" if n_active >= 3 else "score-low")
     st.markdown(f'<div class="{deploy_css}" style="text-align:center;"><b>DEPLOYMENT: {n_active} accounts active</b> | Score: {total}</div>', unsafe_allow_html=True)
 
+    # Pre-compute account risks for each trade idea
+    user_accts = st.session_state.user_accounts
+    has_accounts = len(user_accts) > 0
+
     st.text("")
     left, right = st.columns([3, 2])
 
@@ -185,11 +230,9 @@ with tab_playbook:
         if orb_eligible:
             day = data.get("day", "")
             mw_label = " (elevated threshold)" if day in ["Monday", "Wednesday"] else ""
-            bb_width = data.get("bb_width_today", 0)
-            ema_desc = data.get("ema_desc", "")
 
-            orb_total, orb_tf, orb_ts = calc_risk_allocation("orb", total, "high")
-            orb_deploy = render_risk_deploy(orb_total, orb_tf, orb_ts)
+            orb_risks = calc_account_risk(user_accts, total, "high") if has_accounts else []
+            orb_deploy = render_risk_deploy_accounts(orb_risks)
 
             sizing_label = f"BB: {bb_regime} + EMA: {ema_structure}"
             st.markdown(f"""<div class="score-high">
@@ -218,8 +261,8 @@ with tab_playbook:
         set_keywords = data.get("set_keywords", "")
 
         if set_eligible:
-            set_total, set_tf, set_ts = calc_risk_allocation("set", total, set_conviction)
-            set_deploy = render_risk_deploy(set_total, set_tf, set_ts)
+            set_risks = calc_account_risk(user_accts, total, set_conviction) if has_accounts else []
+            set_deploy = render_risk_deploy_accounts(set_risks)
 
             set_css = "score-high" if set_conviction == "high" else "score-med"
             st.markdown(f"""<div class="{set_css}">
@@ -237,8 +280,8 @@ with tab_playbook:
 
         if jay_eligible:
             jay_conv_label = "high" if jay_conviction == "high" or jay_dom_conviction == "high" else ("med" if js >= 2 else "low")
-            jay_total, jay_tf, jay_ts = calc_risk_allocation("jay", total, jay_conv_label)
-            jay_deploy = render_risk_deploy(jay_total, jay_tf, jay_ts)
+            jay_risks = calc_account_risk(user_accts, total, jay_conv_label) if has_accounts else []
+            jay_deploy = render_risk_deploy_accounts(jay_risks)
             jay_detail = f"Bias: {data.get('jay_bias','?')}/{jay_conviction} | DOM: {jay_dom}/{jay_dom_conviction}"
 
             jay_css = "score-high" if js >= 3 else "score-med"
@@ -314,7 +357,82 @@ with tab_playbook:
 
 
 # ============================================================
-# TAB 2: HOW IT WORKS
+# TAB 2: MY ACCOUNTS
+# ============================================================
+with tab_accounts:
+    st.title("💼 My Accounts")
+    st.caption("Add your prop/eval accounts to get personalized deployment recommendations on each trade idea.")
+
+    # Add account form
+    with st.expander("➕ Add Account", expanded=len(st.session_state.user_accounts) == 0):
+        with st.form("add_account", clear_on_submit=True):
+            c1, c2, c3 = st.columns(3)
+            with c1:
+                acct_name = st.text_input("Account Name", placeholder="e.g. Tradeify 150K #1")
+            with c2:
+                provider = st.selectbox("Provider", ["Tradeify", "TopStepX", "Apex", "Other"])
+            with c3:
+                dd_remaining = st.number_input("Drawdown Remaining ($)", min_value=0, max_value=50000, step=100, value=2000)
+            add_clicked = st.form_submit_button("Add Account", type="primary")
+            if add_clicked and acct_name:
+                st.session_state.user_accounts.append({
+                    "name": acct_name,
+                    "provider": provider,
+                    "dd_remaining": dd_remaining,
+                })
+                st.rerun()
+
+    if not st.session_state.user_accounts:
+        st.info("Add your accounts above to see deployment recommendations in each trade idea.")
+    else:
+        st.markdown("### Your Accounts")
+        for i, acct in enumerate(st.session_state.user_accounts):
+            dd = acct["dd_remaining"]
+            icon = {"Tradeify": "🟠", "TopStepX": "🔵", "Apex": "🟣"}.get(acct.get("provider", ""), "⚪")
+            # DD health
+            if dd < 200: health = "⛔ FROZEN"
+            elif dd < 500: health = "🔴 DANGER"
+            elif dd < 1000: health = "⚠️ CAUTION"
+            else: health = "✅ HEALTHY"
+
+            c1, c2, c3, c4, c5 = st.columns([3, 2, 2, 2, 1])
+            with c1:
+                st.markdown(f"**{icon} {acct['name']}**")
+            with c2:
+                st.markdown(f"{acct.get('provider', '?')}")
+            with c3:
+                st.markdown(f"${dd:,.0f} DD remaining")
+            with c4:
+                st.markdown(health)
+            with c5:
+                if st.button("❌", key=f"rm_{i}"):
+                    st.session_state.user_accounts.pop(i)
+                    st.rerun()
+
+        st.divider()
+        # Summary
+        total_dd = sum(a["dd_remaining"] for a in st.session_state.user_accounts)
+        healthy = sum(1 for a in st.session_state.user_accounts if a["dd_remaining"] >= 500)
+        c1, c2, c3 = st.columns(3)
+        with c1:
+            st.metric("Total Accounts", len(st.session_state.user_accounts))
+        with c2:
+            st.metric("Healthy Accounts", f"{healthy}/{len(st.session_state.user_accounts)}")
+        with c3:
+            st.metric("Total DD Remaining", f"${total_dd:,.0f}")
+
+        st.markdown("""
+        <div style="background:#111827;border:1px solid #1f2937;border-radius:8px;padding:12px;margin-top:8px;font-size:0.85em;color:#9ca3af;">
+        <b>How risk is calculated:</b> Each trade idea gets 10% of your remaining DD as the base risk budget,
+        then scaled by Score multiplier (8+=100%, 6-7=70%, 4-5=50%, 0-3=30%) and Conviction multiplier
+        (High=100%, Med=70%, Low=40%). Accounts below $200 DD are frozen. Below $500 = elite (score 9+) setups only.
+        Risk is calculated per account individually, so accounts with less DD get proportionally smaller risk.
+        </div>
+        """, unsafe_allow_html=True)
+
+
+# ============================================================
+# TAB 3: HOW IT WORKS
 # ============================================================
 with tab_how:
     st.title("How This System Works")
