@@ -330,7 +330,10 @@ with tab_playbook:
                 css = "zone-hot" if n_stars >= 4 else ("zone-warm" if n_stars >= 3 else "zone-cold")
                 roles = " | ".join([f"{s}:{r}" for s, r in z.get("roles", [])])
                 star_display = "\u2B50" * n_stars
-                st.markdown(f'<div class="{css}"><b>{z["price"]:.0f}</b> {star_display} Wt:{z.get("weight",0)}<br><span style="font-size:0.8em;color:#9ca3af;">{roles}</span></div>', unsafe_allow_html=True)
+                lo = z.get("price_lo", z["price"])
+                hi = z.get("price_hi", z["price"])
+                price_label = f"{lo:.0f}-{hi:.0f}" if hi - lo >= 1 else f"{z['price']:.0f}"
+                st.markdown(f'<div class="{css}"><b>{price_label}</b> {star_display} Wt:{z.get("weight",0)}<br><span style="font-size:0.8em;color:#9ca3af;">{roles}</span></div>', unsafe_allow_html=True)
 
             if not _cp_shown:
                 st.markdown(f'<div style="background:#fbbf24;color:#000;text-align:center;padding:6px;border-radius:4px;font-weight:bold;">&#9654; CURRENT: {cp:.0f}</div>', unsafe_allow_html=True)
