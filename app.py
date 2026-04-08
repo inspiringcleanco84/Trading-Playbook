@@ -2,9 +2,8 @@
 Public Trading Playbook Viewer (Read-Only)
 ==========================================
 Reads live playbook data from a GitHub Gist and displays it.
-No account info, no sizing, no deployment details.
-
-Deploy to Streamlit Cloud from a GitHub repo.
+No account names, balances, DD, or deployment details.
+Matches the display and logic of dashboard_v2.py.
 """
 
 import streamlit as st
@@ -16,12 +15,12 @@ from datetime import datetime
 st.set_page_config(page_title="Trading Playbook", page_icon="📊", layout="wide")
 
 # ============================================================
-# CONFIG — set this after running gist_sync.py setup
+# CONFIG
 # ============================================================
 GIST_RAW_URL = st.secrets.get("GIST_RAW_URL", "")
 
 # ============================================================
-# CSS
+# CSS — matches local dashboard
 # ============================================================
 st.markdown("""
 <style>
@@ -59,10 +58,46 @@ def fetch_playbook():
         return None
 
 
+def zone_stars(z):
+    """Convert zone weight to 1-5 star rating."""
+    w = z.get("weight", 0)
+    if w >= 8: return 5
+    if w >= 6: return 4
+    if w >= 4: return 3
+    if w >= 2: return 2
+    return 1
+
+
+# ============================================================
+# Risk allocation logic (matches dashboard_v2.py)
+# ============================================================
+RISK_BUDGETS = {"orb": 500, "set": 500, "jay": 500}
+TF_SPLIT = 0.72
+TS_SPLIT = 0.28
+
+def calc_risk_allocation(bucket, score, conviction):
+    base = RISK_BUDGETS.get(bucket, 500)
+    if score >= 8: sc = 1.0
+    elif score >= 6: sc = 0.7
+    elif score >= 4: sc = 0.5
+    else: sc = 0.3
+    cv = {"high": 1.0, "med": 0.7, "low": 0.4}.get(conviction, 0.4)
+    total = int(base * sc * cv)
+    tf = int(total * TF_SPLIT)
+    ts = total - tf
+    return total, tf, ts
+
+def render_risk_deploy(total, tf, ts):
+    return (f'<div style="margin-top:8px;padding:8px;background:#1e293b;border-radius:6px;font-size:0.9em;">'
+            f'<b>RISK DEPLOYMENT:</b> ${total} total<br>'
+            f'&nbsp;&nbsp;🟠 <b>Tradeify:</b> ${tf} risk&nbsp;&nbsp;|&nbsp;&nbsp;'
+            f'🔵 <b>TopStepX:</b> ${ts} risk</div>')
+
+
 # ============================================================
 # TABS
 # ============================================================
-tab_playbook, tab_accounts, tab_how = st.tabs(["📊 Live Playbook", "💼 My Accounts", "📖 How It Works"])
+tab_playbook, tab_how = st.tabs(["📊 Live Playbook", "📖 How It Works"])
 
 
 # ============================================================
@@ -80,33 +115,57 @@ with tab_playbook:
     st.caption(f"{data.get('day', '')}, {data.get('date', '')} | {data.get('phase', '')}")
     st.markdown(f'<div style="text-align:right;color:#9ca3af;font-size:0.85em;margin-top:-10px;">Last Updated: <b>{data.get("updated", "?")}</b></div>', unsafe_allow_html=True)
 
-    # Metrics row
-    c1, c2, c3, c4, c5, c6 = st.columns(6)
+    # Metrics row — matches local dashboard
     total = data.get("total_score", 0)
+    ss = data.get("set_score", 0)
+    js = data.get("jay_score", 0)
+    ts = data.get("tech_score", 0)
+    sb = data.get("set_bias", "silent")
+    jb = data.get("jay_bias", "none")
+    bb_regime = data.get("bb_regime", "?")
+    bb_orb_signal = data.get("bb_orb_signal", "?")
+    ema_structure = data.get("ema_structure", "?")
+    set_conviction = data.get("set_conviction", "med")
+    jay_conviction = data.get("jay_conviction", "med")
+    jay_dom = data.get("jay_dom", "none")
+    jay_dom_conviction = data.get("jay_dom_conviction", "med")
+    cp = data.get("current_price", 0)
+    prior_close = data.get("prior_close", 0) or data.get("ovn_low", 0)
+    zones = data.get("zones", [])
+
+    c1, c2, c3, c4, c5, c6 = st.columns(6)
     with c1:
         label = "ELITE" if total >= 9 else ("Good" if total >= 7 else ("Min" if total >= 4 else "Skip"))
-        st.metric("Total Score", f"{total}/{data.get('max_score', 11)}", delta=label)
+        st.metric("Total Score", f"{total}/12", delta=label)
     with c2:
-        sb = data.get("set_bias", "silent")
-        st.metric("Set", f"{data.get('set_score', 0)}/{data.get('set_max', 5)}", delta=sb if sb not in ["silent", "neutral"] else None)
+        if sb == "bear":
+            st.metric("Set", f"{ss}/4", delta="bear", delta_color="inverse")
+        elif sb == "bull":
+            st.metric("Set", f"{ss}/4", delta="bull")
+        else:
+            st.metric("Set", f"{ss}/4")
     with c3:
-        jb = data.get("jay_bias", "none")
-        st.metric("Jay", f"{data.get('jay_score', 0)}/{data.get('jay_max', 2)}", delta=jb if jb not in ["none", "neutral"] else None)
+        if jb == "bear":
+            st.metric("Jay", f"{js}/4", delta="bear", delta_color="inverse")
+        elif jb == "bull":
+            st.metric("Jay", f"{js}/4", delta="bull")
+        else:
+            st.metric("Jay", f"{js}/4")
     with c4:
-        st.metric("BB Regime", data.get("bb_regime", "?"), delta=data.get("bb_orb_signal", "?"))
+        st.metric("BB Regime", bb_regime, delta=bb_orb_signal)
     with c5:
-        ema = data.get("ema_structure", "?")
-        st.metric("EMAs", ema, delta="+1" if ema in ["BULL STACK", "BEAR STACK"] else "+0")
+        st.metric("EMAs", ema_structure, delta="+1" if ema_structure in ["BULL STACK", "BEAR STACK"] else "+0")
     with c6:
-        gap = data.get("gap", 0)
-        st.metric("Gap", f"{gap:+.1f}" if gap else "--")
+        if cp and prior_close:
+            st.metric("Gap", f"{cp - prior_close:+.1f}")
+        else:
+            st.metric("Gap", "--")
 
     # BB Regime banner
-    bb_signal = data.get("bb_orb_signal", "")
-    rc = "score-high" if bb_signal == "GO" else ("score-skip" if bb_signal == "SKIP" else "score-med")
-    st.markdown(f'<div class="{rc}" style="text-align:center;font-size:1.1em;"><b>BB REGIME: {data.get("bb_regime","?")}</b> -- {data.get("bb_desc","")}</div>', unsafe_allow_html=True)
+    rc = "score-high" if bb_orb_signal == "GO" else ("score-skip" if bb_orb_signal == "SKIP" else "score-med")
+    st.markdown(f'<div class="{rc}" style="text-align:center;font-size:1.1em;"><b>BB REGIME: {bb_regime}</b> -- {data.get("bb_desc","")}</div>', unsafe_allow_html=True)
 
-    # Deployment summary (count only, no names)
+    # Deployment summary (public: count only, no account names)
     n_active = data.get("n_accounts_active", 0)
     deploy_css = "score-high" if n_active >= 5 else ("score-med" if n_active >= 3 else "score-low")
     st.markdown(f'<div class="{deploy_css}" style="text-align:center;"><b>DEPLOYMENT: {n_active} accounts active</b> | Score: {total}</div>', unsafe_allow_html=True)
@@ -115,285 +174,147 @@ with tab_playbook:
     left, right = st.columns([3, 2])
 
     with left:
-        st.subheader("Trade Ideas")
+        st.subheader("🎯 Trade Ideas + Account Deployment")
 
-        # ORB
-        if data.get("orb_eligible"):
-            orb_dir = (data.get("orb_direction") or "both").upper()
-            css = "score-high"
+        # ---- ORB ----
+        orb_eligible = data.get("orb_eligible", False)
+        orb_day = data.get("orb_day", False)
+        orb_min_score = data.get("orb_min_score", 4)
+        orb_dir = (data.get("orb_direction") or "both").upper()
+
+        if orb_eligible:
             day = data.get("day", "")
-            mw = " (elevated threshold)" if day in ["Monday", "Wednesday"] else ""
-            st.markdown(f"""<div class="{css}">
-                <b>ORB BREAKOUT -- {orb_dir}</b>{mw}<br>
-                <span style="font-size:0.9em;">15-min range break at 7:45 MT | Stop: opposite side + 4 ticks | T1: 2R, Runner to 4R/EOD</span>
-            </div>""", unsafe_allow_html=True)
-        elif data.get("orb_day"):
-            reason = f"BB {data.get('bb_regime','?')} ({data.get('bb_orb_signal','SKIP')})" if data.get("bb_orb_signal") != "GO" else f"Score {total} < {data.get('orb_min_score', 4)}"
-            st.markdown(f'<div class="score-skip">ORB: <b>SKIP</b> -- {reason}</div>', unsafe_allow_html=True)
+            mw_label = " (elevated threshold)" if day in ["Monday", "Wednesday"] else ""
+            bb_width = data.get("bb_width_today", 0)
+            ema_desc = data.get("ema_desc", "")
 
-        # SET
-        if data.get("set_eligible"):
+            orb_total, orb_tf, orb_ts = calc_risk_allocation("orb", total, "high")
+            orb_deploy = render_risk_deploy(orb_total, orb_tf, orb_ts)
+
+            sizing_label = f"BB: {bb_regime} + EMA: {ema_structure}"
             st.markdown(f"""<div class="score-high">
-                <b>SET TRADE -- {data.get('set_direction','?')} (2-Bullet)</b> | Conv: HIGH<br>
-                <span style="font-size:0.9em;">B1: Entry at Set's level | B2: Re-entry if B1 stops | {data.get('set_keywords','')}</span>
-            </div>""", unsafe_allow_html=True)
+                <b>🟢 MNQ ORB BREAKOUT</b> -- {day}{mw_label} | Score {total} | Direction: {orb_dir} favored<br>
+                <span style="font-size:0.9em;color:#fbbf24;"><b>SIZING: {sizing_label}</b></span>
+                <table style="width:100%;font-size:0.9em;margin-top:6px;">
+                <tr><td style="color:#9ca3af;width:80px;">Entry</td><td>15-min range break (7:45 MT)</td>
+                    <td style="color:#9ca3af;width:80px;">Window</td><td>7:30-9:00 MT</td></tr>
+                <tr><td style="color:#9ca3af;">Stop</td><td>Opposite side + 4 ticks</td>
+                    <td style="color:#9ca3af;">Target</td><td>Majority@2R + Runner@BE to 4R/EOD</td></tr>
+                </table>
+                {orb_deploy}</div>""", unsafe_allow_html=True)
+        elif orb_day and bb_orb_signal != "GO":
+            st.markdown(f'<div class="score-skip">🔴 ORB: BB regime is {bb_regime} ({bb_orb_signal}). <b>SKIP.</b></div>', unsafe_allow_html=True)
+        elif orb_day and total < orb_min_score:
+            day = data.get("day", "")
+            mw_note = " -- Mon/Wed needs 5+" if day in ["Monday", "Wednesday"] else ""
+            st.markdown(f'<div class="score-skip">🔴 ORB: Score {total} below minimum ({orb_min_score}{mw_note}). <b>SKIP.</b></div>', unsafe_allow_html=True)
+        elif not orb_day:
+            day = data.get("day", "")
+            st.markdown(f'<div class="score-skip">🔴 ORB: Weekend ({day}). <b>SKIP.</b></div>', unsafe_allow_html=True)
+
+        # ---- SET TRADE ----
+        set_eligible = data.get("set_eligible", False)
+        set_dir_str = data.get("set_direction", "?")
+        set_keywords = data.get("set_keywords", "")
+
+        if set_eligible:
+            set_total, set_tf, set_ts = calc_risk_allocation("set", total, set_conviction)
+            set_deploy = render_risk_deploy(set_total, set_tf, set_ts)
+
+            set_css = "score-high" if set_conviction == "high" else "score-med"
+            st.markdown(f"""<div class="{set_css}">
+                <b>🟢 SET TRADE -- {set_dir_str}</b> -- Score {total} | Conv: {set_conviction.upper()}
+                {set_deploy}</div>""", unsafe_allow_html=True)
         elif sb in ["bull", "bear"]:
-            conv = data.get("set_conviction", "?")
-            st.markdown(f'<div class="score-skip">SET TRADE: <b>SKIP</b> -- score {total} or conviction {conv}</div>', unsafe_allow_html=True)
+            reasons = []
+            if set_conviction == "low": reasons.append("conviction low (skip)")
+            st.markdown(f'<div class="score-skip">🔴 SET TRADE: <b>SKIP</b> -- {", ".join(reasons) if reasons else "not eligible"}</div>', unsafe_allow_html=True)
 
-        # JAY
-        if data.get("jay_eligible"):
-            st.markdown(f"""<div class="score-med">
-                <b>JAY TRADE -- {data.get('jay_direction','?')} (Scalp)</b> | Conv: {data.get('jay_conviction','?').upper()}<br>
-                <span style="font-size:0.9em;">Limit at Jay's level | Fast in/out | {data.get('jay_notes','')}</span>
-            </div>""", unsafe_allow_html=True)
+        # ---- JAY TRADE ----
+        jay_eligible = data.get("jay_eligible", False)
+        jay_dir_str = data.get("jay_direction", "?")
+        jay_notes = data.get("jay_notes", "")
+
+        if jay_eligible:
+            jay_conv_label = "high" if jay_conviction == "high" or jay_dom_conviction == "high" else ("med" if js >= 2 else "low")
+            jay_total, jay_tf, jay_ts = calc_risk_allocation("jay", total, jay_conv_label)
+            jay_deploy = render_risk_deploy(jay_total, jay_tf, jay_ts)
+            jay_detail = f"Bias: {data.get('jay_bias','?')}/{jay_conviction} | DOM: {jay_dom}/{jay_dom_conviction}"
+
+            jay_css = "score-high" if js >= 3 else "score-med"
+            st.markdown(f"""<div class="{jay_css}">
+                <b>🔵 JAY TRADE -- {jay_dir_str}</b> -- Jay {js}/4 | {jay_detail}
+                {jay_deploy}</div>""", unsafe_allow_html=True)
         elif jb in ["bull", "bear"]:
-            st.markdown(f'<div class="score-skip">JAY TRADE: <b>SKIP</b> -- low conviction</div>', unsafe_allow_html=True)
+            st.markdown(f'<div class="score-skip">🔴 JAY TRADE: <b>SKIP</b> -- no conviction (Jay {js}/4)</div>', unsafe_allow_html=True)
 
-        # Bounce zones
-        zones = data.get("zones", [])
-        cp = data.get("current_price", 0)
+        # ---- BOUNCE ZONES ----
         if zones and cp:
             st.text("")
-            st.markdown("**Level Bounce Zones** (watch for PA confirmation)")
-            for z in sorted(zones, key=lambda x: -x["weight"])[:6]:
+            st.markdown("**📍 Level Bounce Zones** (watch for PA confirmation)")
+            for z in sorted(zones, key=lambda x: -x.get("weight", 0))[:6]:
                 dist = z["price"] - cp
                 if abs(dist) < 3 or abs(dist) > 80:
                     continue
                 role = "Support" if dist < 0 else "Resistance"
                 action = "Buy bounce" if dist < 0 else "Sell rejection"
-                css = "zone-hot" if z["weight"] >= 5 else ("zone-warm" if z["weight"] >= 3 else "zone-cold")
-                roles_str = " | ".join([f"{s}:{r}" for s, r in z["roles"]])
-                stars = "+" * min(z["src_count"], 5)
+                n_stars = zone_stars(z)
+                css = "zone-hot" if n_stars >= 4 else ("zone-warm" if n_stars >= 3 else "zone-cold")
+                roles_str = " | ".join([f"{s}:{r}" for s, r in z.get("roles", [])])
+                star_display = "\u2B50" * n_stars
+
                 st.markdown(f"""<div class="{css}">
-                    <b>{z['price']:.0f}</b> ({dist:+.0f}pt) -- {role} [{stars}]
-                    <span style="float:right;">Wt:{z['weight']} | {z['src_count']} sources</span><br>
+                    <b>{z['price']:.0f}</b> -- {role} {star_display}
+                    <span style="float:right;">Wt:{z.get('weight',0)}</span><br>
                     <span style="font-size:0.8em;color:#9ca3af;">{action} | {roles_str}</span>
                 </div>""", unsafe_allow_html=True)
 
     with right:
-        st.subheader("Level Map")
+        # ---- LEVEL MAP ----
+        st.subheader("📍 Level Map")
         if zones and cp:
-            current_printed = False
+            _cp_shown = False
             for z in sorted(zones, key=lambda x: x["price"]):
                 dist = z["price"] - cp
                 if abs(dist) > 100:
                     continue
-                css = "zone-hot" if z["weight"] >= 5 else ("zone-warm" if z["weight"] >= 3 else "zone-cold")
-                roles = " | ".join([f"{s}:{r}" for s, r in z["roles"]])
-                stars = "+" * min(z["src_count"], 5)
+                n_stars = zone_stars(z)
+                css = "zone-hot" if n_stars >= 4 else ("zone-warm" if n_stars >= 3 else "zone-cold")
+                roles = " | ".join([f"{s}:{r}" for s, r in z.get("roles", [])])
+                star_display = "\u2B50" * n_stars
 
-                if not current_printed and z["price"] > cp:
-                    st.markdown(f'<div style="background:#fbbf24;color:#000;text-align:center;padding:6px;border-radius:4px;font-weight:bold;">CURRENT: {cp:.0f}</div>', unsafe_allow_html=True)
-                    current_printed = True
+                if not _cp_shown and z["price"] > cp:
+                    st.markdown(f'<div style="background:#fbbf24;color:#000;text-align:center;padding:6px;border-radius:4px;font-weight:bold;">&#9654; CURRENT: {cp:.0f}</div>', unsafe_allow_html=True)
+                    _cp_shown = True
 
-                st.markdown(f'<div class="{css}"><b>{z["price"]:.0f}</b> ({dist:+.0f}) [{stars}] Wt:{z["weight"]}<br><span style="font-size:0.8em;color:#9ca3af;">{roles}</span></div>', unsafe_allow_html=True)
+                st.markdown(f'<div class="{css}"><b>{z["price"]:.0f}</b> {star_display} Wt:{z.get("weight",0)}<br><span style="font-size:0.8em;color:#9ca3af;">{roles}</span></div>', unsafe_allow_html=True)
 
-            if not current_printed:
-                st.markdown(f'<div style="background:#fbbf24;color:#000;text-align:center;padding:6px;border-radius:4px;font-weight:bold;">CURRENT: {cp:.0f}</div>', unsafe_allow_html=True)
+            if not _cp_shown:
+                st.markdown(f'<div style="background:#fbbf24;color:#000;text-align:center;padding:6px;border-radius:4px;font-weight:bold;">&#9654; CURRENT: {cp:.0f}</div>', unsafe_allow_html=True)
         else:
             st.info("Levels will appear once the session is active.")
+
+        # ---- RULES ----
+        st.text("")
+        st.subheader("📏 Rules")
+        st.markdown(f"""
+        - **Min score ORB**: {orb_min_score} | **Set**: 7 | **Jay**: always eligible
+        - **BB regime**: {bb_regime} -- ORB {bb_orb_signal}
+        - **Accounts active**: {n_active} (score {total})
+        - ORB: Mon-Fri 7:30-9:00 MT (Mon/Wed need score 5+, TuThFr need 4+)
+        - Set trade: HIGH conviction + score 7+ only
+        - Jay trade: Scored deployment only
+        - Max 2 trades before 9:00, 3 total/day
+        - Daily loss: 2 stops = done for the day
+        - EOD flatten by 13:55 MT
+        """)
 
     # Auto-refresh
     st.caption("Auto-refreshes every 30 seconds. Data updates whenever inputs change on the main dashboard.")
 
 
 # ============================================================
-# TAB 2: MY ACCOUNTS
-# ============================================================
-with tab_accounts:
-    st.title("💼 My Accounts")
-    st.caption("Add your prop/eval accounts to get personalized deployment recommendations based on today's playbook score.")
-
-    # Initialize session state for accounts
-    if "user_accounts" not in st.session_state:
-        st.session_state.user_accounts = []
-
-    # Add account form
-    with st.expander("➕ Add Account", expanded=len(st.session_state.user_accounts) == 0):
-        with st.form("add_account", clear_on_submit=True):
-            c1, c2, c3 = st.columns(3)
-            with c1:
-                acct_name = st.text_input("Account Name", placeholder="e.g. Apex 150K #1, TopStep 50K")
-            with c2:
-                dd_type = st.selectbox("Drawdown Type", ["EOD (End of Day)", "Intraday (Real-Time)"])
-            with c3:
-                dd_amount = st.number_input("Drawdown Remaining ($)", min_value=0, max_value=50000, step=100, value=2000)
-            add_clicked = st.form_submit_button("Add Account", type="primary")
-            if add_clicked and acct_name:
-                st.session_state.user_accounts.append({
-                    "name": acct_name,
-                    "dd_type": "EOD" if "EOD" in dd_type else "Intraday",
-                    "dd_remaining": dd_amount,
-                })
-                st.rerun()
-
-    if not st.session_state.user_accounts:
-        st.info("Add your accounts above to see deployment recommendations.")
-    else:
-        # Display accounts with remove buttons
-        st.markdown("### Your Accounts")
-        for i, acct in enumerate(st.session_state.user_accounts):
-            pct = acct["dd_remaining"] / max(acct["dd_remaining"], 1) * 100  # relative to itself
-            dd_icon = "🕐" if acct["dd_type"] == "EOD" else "⚡"
-            c1, c2, c3, c4 = st.columns([3, 2, 2, 1])
-            with c1:
-                st.markdown(f"**{acct['name']}**")
-            with c2:
-                st.markdown(f"{dd_icon} {acct['dd_type']} DD")
-            with c3:
-                st.markdown(f"${acct['dd_remaining']:,.0f} remaining")
-            with c4:
-                if st.button("❌", key=f"rm_{i}"):
-                    st.session_state.user_accounts.pop(i)
-                    st.rerun()
-
-        st.divider()
-
-        # ---- DEPLOYMENT RECOMMENDATION ----
-        data = fetch_playbook()
-        if not data:
-            st.warning("Playbook not loaded yet — deployment recommendations will appear when the session is active.")
-        else:
-            total = data.get("total_score", 0)
-            bb_regime = data.get("bb_regime", "UNKNOWN")
-            bb_signal = data.get("bb_orb_signal", "SKIP")
-            ema_structure = data.get("ema_structure", "UNKNOWN")
-            dom_bias = data.get("dom_bias", "neutral")
-
-            st.markdown(f"### Deployment Recommendation — Score {total}/12")
-
-            # DD safety thresholds
-            DD_FROZEN = 0.25     # below 25% of original = frozen
-            DD_DANGER = 0.40     # below 40% = danger
-            DD_CAUTION = 0.60    # below 60% = caution
-
-            # Estimate original DD from remaining (conservative: assume healthy account)
-            # Since we don't know original DD, use tiers based on absolute $ remaining
-            # Intraday DD is more restrictive: tighter stops, less room for error
-
-            accounts_analysis = []
-            for acct in st.session_state.user_accounts:
-                dd = acct["dd_remaining"]
-                dd_type = acct["dd_type"]
-
-                # Risk per trade: 20% of remaining DD
-                max_risk = dd * 0.20
-
-                # Contract sizing based on trade type
-                # ORB: ~20pt stop * $5/pt = $100/ct
-                orb_stop_cost = 20 * 5  # $100 per contract
-                orb_cts = max(1, int(max_risk / orb_stop_cost))
-
-                # Set trade: ~15pt stop * $5/pt = $75/ct
-                set_stop_cost = 15 * 5  # $75 per contract
-                set_cts = max(1, int(max_risk / set_stop_cost))
-
-                # Jay scalp: ~4pt stop * $5/pt = $20/ct
-                jay_stop_cost = 4 * 5  # $20 per contract
-                jay_cts = max(1, int(max_risk / jay_stop_cost))
-
-                # Status
-                if dd < 200:
-                    status = "FROZEN"
-                    status_css = "score-skip"
-                    status_icon = "⛔"
-                    reason = "DD too low — protect this account"
-                elif dd < 500:
-                    status = "DANGER"
-                    status_css = "score-skip"
-                    status_icon = "🔴"
-                    reason = "Minimal DD — elite setups only (score 9+)"
-                elif dd < 1000:
-                    status = "CAUTION"
-                    status_css = "score-low"
-                    status_icon = "⚠️"
-                    reason = "Reduced size — good setups only (score 7+)"
-                else:
-                    status = "HEALTHY"
-                    status_css = "score-high" if total >= 7 else "score-med"
-                    status_icon = "✅"
-                    reason = "Full deployment available"
-
-                # Intraday DD adjustment
-                intraday_note = ""
-                if dd_type == "Intraday":
-                    orb_cts = max(1, orb_cts - 1)  # reduce by 1 for tighter leash
-                    set_cts = max(1, set_cts - 1)
-                    intraday_note = " (Intraday DD: sized down -1ct)"
-
-                # Score gating
-                eligible_trades = []
-                if status == "FROZEN":
-                    eligible_trades.append("No trades — account frozen")
-                else:
-                    if status == "DANGER" and total < 9:
-                        eligible_trades.append("No trades — need score 9+ at this DD level")
-                    elif status == "CAUTION" and total < 7:
-                        eligible_trades.append("No trades — need score 7+ at this DD level")
-                    else:
-                        if data.get("orb_eligible"):
-                            eligible_trades.append(f"ORB: {orb_cts}ct MES (${orb_cts * orb_stop_cost} risk)")
-                        if data.get("set_eligible"):
-                            eligible_trades.append(f"Set Trade: {set_cts}ct MES (${set_cts * set_stop_cost} risk)")
-                        if data.get("jay_eligible"):
-                            eligible_trades.append(f"Jay Scalp: {jay_cts}ct MES (${jay_cts * jay_stop_cost} risk)")
-                        if not eligible_trades:
-                            eligible_trades.append("No trades eligible today (check playbook)")
-
-                accounts_analysis.append({
-                    "acct": acct,
-                    "status": status,
-                    "status_css": status_css,
-                    "status_icon": status_icon,
-                    "reason": reason,
-                    "eligible_trades": eligible_trades,
-                    "orb_cts": orb_cts,
-                    "set_cts": set_cts,
-                    "jay_cts": jay_cts,
-                    "intraday_note": intraday_note,
-                })
-
-            # Render deployment cards
-            for a in accounts_analysis:
-                acct = a["acct"]
-                dd_icon = "🕐" if acct["dd_type"] == "EOD" else "⚡"
-                trades_html = "<br>".join([f"&nbsp;&nbsp;- {t}" for t in a["eligible_trades"]])
-
-                st.markdown(f"""<div class="{a['status_css']}">
-                    <b>{a['status_icon']} {acct['name']}</b> — {dd_icon} {acct['dd_type']} DD | ${acct['dd_remaining']:,.0f} remaining | Status: <b>{a['status']}</b>{a['intraday_note']}<br>
-                    <span style="font-size:0.9em;color:#9ca3af;">{a['reason']}</span><br>
-                    <div style="margin-top:8px;font-size:0.9em;">
-                    <b>Today's Trades:</b><br>{trades_html}
-                    </div>
-                </div>""", unsafe_allow_html=True)
-
-            # Summary
-            st.divider()
-            active_count = sum(1 for a in accounts_analysis if a["status"] not in ["FROZEN", "DANGER"] or (a["status"] == "DANGER" and total >= 9) or (a["status"] == "CAUTION" and total >= 7))
-            total_orb_cts = sum(a["orb_cts"] for a in accounts_analysis if a["status"] not in ["FROZEN"] and not (a["status"] == "DANGER" and total < 9) and not (a["status"] == "CAUTION" and total < 7))
-            total_dd = sum(a["acct"]["dd_remaining"] for a in accounts_analysis)
-
-            c1, c2, c3 = st.columns(3)
-            with c1:
-                st.metric("Accounts Eligible", f"{active_count}/{len(st.session_state.user_accounts)}")
-            with c2:
-                st.metric("Total DD Remaining", f"${total_dd:,.0f}")
-            with c3:
-                st.metric("Today's Score", f"{total}/12")
-
-            st.markdown("""
-            <div style="background:#111827;border:1px solid #1f2937;border-radius:8px;padding:12px;margin-top:8px;font-size:0.85em;color:#9ca3af;">
-            <b>How this works:</b> Each account gets sized independently based on its remaining drawdown.
-            Max risk per trade = 20% of remaining DD. Intraday DD accounts get sized down by 1 contract
-            for safety (real-time DD means you can get pulled mid-trade). Accounts below $200 DD are frozen.
-            Below $500 = only elite (9+) setups. Below $1,000 = only good (7+) setups.
-            </div>
-            """, unsafe_allow_html=True)
-
-
-# ============================================================
-# TAB 3: HOW IT WORKS
+# TAB 2: HOW IT WORKS
 # ============================================================
 with tab_how:
     st.title("How This System Works")
@@ -437,6 +358,27 @@ The total score determines whether we trade, how many accounts we deploy, and ho
 
     st.markdown("""
 <div class="how-section">
+<div class="how-header">Risk Allocation: 72/28 Split (Option A)</div>
+
+Every trade idea gets a risk budget based on **Score x Conviction**, then split across providers:
+
+| Bucket | Base Budget | Scaled By |
+|--------|-------------|-----------|
+| **ORB** | $500 | Score mult x Conviction mult |
+| **Set** | $500 | Score mult x Conviction mult |
+| **Jay** | $500 | Score mult x Conviction mult |
+
+**Score multiplier:** 8+ = 100% | 6-7 = 70% | 4-5 = 50% | 0-3 = 30%<br>
+**Conviction multiplier:** High = 100% | Med = 70% | Low = 40%
+
+**Provider split:** 72% Tradeify / 28% TopStepX (backtested Option A -- 0/8 accounts blown)
+
+Example: Score 8 + High Conviction = $500 total -> $360 Tradeify + $140 TopStepX
+</div>
+""", unsafe_allow_html=True)
+
+    st.markdown("""
+<div class="how-section">
 <div class="how-header">Set's Bias (0-4 points)</div>
 
 Set (@Adaamset) is an ES futures trader who posts weekly bias updates on Substack with key levels,
@@ -458,9 +400,7 @@ plus real-time Discord journal entries during the session.
 **His levels as S/R zones:** Backtested at 66.7% bounce rate overall, 83.8% at resistance levels.
 Over 2 years: 65.6% win rate, 1.98 win/loss ratio on 1,704 journal entries across 321 trading days.
 
-**Silence rules:**
-- No post during an active Substack swing = he's still in, carry forward last conviction
-- No post AND no active bias = neutral/sidelined (score 0)
+**Set trade eligibility:** Take unless conviction is "low" -- very permissive gate.
 </div>
 """, unsafe_allow_html=True)
 
@@ -478,14 +418,9 @@ the DOM (Depth of Market) intraday for sentiment shifts. He provides exact entry
 | **VP Bias** | Pre-market Volume Profile read (Bull/Bear/Balance/Neutral) | High=2, Med=1, Low=0 |
 | **DOM Sentiment** | Intraday DOM read, can confirm or shift his bias | High=2, Med=1, Low=0 |
 
-When both inputs align with high conviction, Jay scores 4/4 — a very strong independent signal.
-When they diverge (bullish VP but bearish DOM), the score reflects that uncertainty.
-
-**Why Jay is always eligible:** Unlike Set trades (which need score 7+), Jay's scalp trades are
+**Why Jay is always eligible:** Unlike Set trades, Jay's scalp trades are
 always shown when he has a directional call with any conviction. His style is fast in/out scalps
-at specific levels, which can work independently of the broader confluence picture.
-
-Jay's key levels feed into the Level Map with weight 2, contributing to zone clustering.
+at specific levels, which work independently of the broader confluence picture.
 </div>
 """, unsafe_allow_html=True)
 
@@ -494,30 +429,24 @@ Jay's key levels feed into the Level Map with weight 2, contributing to zone clu
 <div class="how-header">Technicals: Bollinger Band Regime (0-3 points)</div>
 
 We classify the 1-hour ES Bollinger Bands into a **5-state regime** based on width and trend direction.
-This was backtested against 2 years of ORB (Opening Range Breakout) data.
+Calibrated against real data: TRENDING >= 0.75% width, NORMAL >= 0.40%, SQUEEZE < 0.40%.
 
-| Regime | Condition | Signal | Score | What It Means |
-|--------|-----------|--------|-------|--------------|
-| **SQUEEZE** | Narrow (<50pt) + contracting | GO | 3 | Coiling for a breakout |
-| **BREAKOUT** | Narrow (<50pt) + expanding | GO | 3 | Move is starting |
-| **TRENDING** | Wide (50pt+) + expanding | GO | 3 | Strong momentum |
-| **WIDE PULLBACK** | 60pt+ but contracting | GO | 2 | Prior trend still active |
-| **EXHAUSTION** | 50-60pt + contracting | SKIP | 0 | Chop zone, fade the edges |
+| Regime | Signal | Score | What It Means |
+|--------|--------|-------|--------------|
+| **SQUEEZE** | GO | 3 | Coiling for a breakout |
+| **BREAKOUT** | GO | 3 | Move is starting |
+| **TRENDING** | GO | 3 | Strong momentum |
+| **WIDE PULLBACK** | GO | 2 | Prior trend still active |
+| **EXHAUSTION** | SKIP | 0 | Chop zone, fade the edges |
 
-**Why this matters:** Backtested results showed GO regimes produce PF 1.81 (+$107K over 2 years).
-EXHAUSTION regime produces PF 0.60 -- a net loser. The old method (simple expanding/contracting toggle)
-had PF 1.72, so this 5-state system adds +$32,600 in edge.
-
-**The 60pt override:** When BBs are very wide (60pt+) even while contracting, the prior trend is still
-active enough to trade. Backtested at 72.7% WR, PF 3.72.
+**Backtested:** GO regimes produce PF 1.81 (+$107K over 2 years).
+EXHAUSTION regime produces PF 0.60 -- a net loser.
 </div>
 """, unsafe_allow_html=True)
 
     st.markdown("""
 <div class="how-section">
 <div class="how-header">Technicals: EMA Structure (0-1 point)</div>
-
-We read the 20, 50, and 200 period EMAs from the 1-hour ES chart.
 
 | Structure | Condition | Score |
 |-----------|-----------|-------|
@@ -527,9 +456,25 @@ We read the 20, 50, and 200 period EMAs from the 1-hour ES chart.
 
 **Backtested edge:** Bull Stack trades had PF 2.16 (vs 1.82 baseline). Bull Stack + tight EMA spread
 (<43pt between EMA 20 and 200) = PF 2.82, 62.9% WR.
+</div>
+""", unsafe_allow_html=True)
 
-**Why +1 not +2:** EMA stacking is a strong confirmation signal but used as a gate it would filter
-out 206 viable trades. As a +1 point confirmation, it lifts the best setups without blocking good ones.
+    st.markdown("""
+<div class="how-section">
+<div class="how-header">Level Map & Star System</div>
+
+All levels from every source get clustered into zones (+/- 8pt). Weight determines stars:
+
+**Weight Hierarchy:**
+| Source | Weight |
+|--------|--------|
+| VP-Y POC | 5 |
+| VP-Y VAH/VAL, VP-M POC | 4 |
+| VP-M VAH/VAL, VP-W POC, Set Pivot, Plan Bull/Bear Pivot | 3 |
+| VP-W VAH/VAL, VP-D POC, Set S/R, Jay Keys, Plan TU/R/S/TD, Prior Day H/L | 2 |
+| VP-D VAH/VAL, ON H/L, Set Minor/Targets | 1 |
+
+**Star Rating:** Wt 8+ = 5 stars | Wt 6-7 = 4 stars | Wt 4-5 = 3 stars | Wt 2-3 = 2 stars | Wt 1 = 1 star
 </div>
 """, unsafe_allow_html=True)
 
@@ -537,101 +482,16 @@ out 206 viable trades. As a +1 point confirmation, it lifts the best setups with
 <div class="how-section">
 <div class="how-header">ORB Strategy (Opening Range Breakout)</div>
 
-The primary automated trade. We use the first 15 minutes of Regular Trading Hours (7:30-7:45 MT)
-to define a range, then trade the breakout of that range.
+The primary automated trade. MNQ 15-min opening range breakout.
 
 **Rules:**
 - **Entry**: Break of the 15-min high (long) or low (short) after 7:45 MT
 - **Stop**: Opposite side of the range + 4 ticks
 - **Targets**: 50% off at 2R, runner at breakeven to 4R or EOD
 - **Window**: Must trigger by 9:00 MT or cancel
+- **Risk**: $200 max per account (MNQ $2/pt)
 
-**Why ORB:**
-- Mechanical, repeatable, no discretion needed
-- Backtested PF 1.87 with Model B sizing over 2 years
-- Works best on Tuesday, Thursday, Friday (PF 1.84)
-- Monday/Wednesday added with elevated score threshold (5+ vs 4+), backtested PF 2.17
-
-**Model B Sizing (BB + EMA -> contracts per account):**
-
-| Tier | Condition | Contracts |
-|------|-----------|-----------|
-| MAX | TRENDING/BREAKOUT + stacked EMAs + tight spread (<43pt) | 5 |
-| FULL | Any GO regime + stacked EMAs | 4 |
-| MID | Any GO regime + mixed EMAs, OR Wide PB + stacked | 3 |
-| MIN | Wide Pullback + mixed EMAs | 2 |
-| SKIP | EXHAUSTION regime | 0 |
-
-Backtested: MAX tier had 65% WR and PF 2.86 over 157 trades. Model B adds +$25K over flat sizing.
-</div>
-""", unsafe_allow_html=True)
-
-    st.markdown("""
-<div class="how-section">
-<div class="how-header">Set Trades (Discretionary)</div>
-
-When Set has a high-conviction directional call AND the total score is 7+, we deploy a 2-bullet
-entry strategy following his thesis.
-
-**Why score 7+:** Set's trades are discretionary swing/intraday plays. The score threshold ensures
-we only follow his calls when other signals (Jay, technicals) confirm. His calls without confirmation
-have a lower win rate.
-
-**2-Bullet System:**
-- **Bullet 1** (60% of risk): Enter at Set's level when he posts
-- **Bullet 2** (40% of risk): Only if B1 stops out -- re-enter at the next support/resistance level
-- This gives a second chance at a better price while capping total risk
-</div>
-""", unsafe_allow_html=True)
-
-    st.markdown("""
-<div class="how-section">
-<div class="how-header">Level Map & Bounce Zones</div>
-
-All levels from every source get clustered into zones. When multiple independent sources point to
-the same price area (+/- 8 points), that zone gets higher weight and more stars.
-
-**Sources and their weights:**
-| Source | Examples | Base Weight |
-|--------|----------|-------------|
-| Set's Pivot | Central level from Substack | 3 |
-| Set's S/R | Support & resistance levels | 2 |
-| Jay's Levels | Key levels from his calls | 2 |
-| Daily Plan | Bull/Bear pivots | 3 |
-| Daily Plan | Trend Up/Down, S/R | 2 |
-| VP Daily | POC | 2 |
-| VP Daily | VAH, VAL | 1 |
-| VP Weekly | W-POC | 3 |
-| VP Weekly | W-VAH, W-VAL | 2 |
-| VP Monthly | M-POC | 3 |
-| VP Monthly | M-VAH, M-VAL | 2 |
-| Prior Day | High, Low | 1 |
-| Overnight | High, Low | 1 |
-
-**How zones work:** Levels within 8 points of each other cluster together. The zone's total weight
-is the sum of all individual weights. More sources = more stars = higher confidence that price
-will react at that level.
-
-**Bounce trade logic:** When price approaches a high-weight zone, watch for price action confirmation
-(rejection candle, delta shift, absorption on footprint) before entering a bounce trade.
-</div>
-""", unsafe_allow_html=True)
-
-    st.markdown("""
-<div class="how-section">
-<div class="how-header">Account Deployment (Phase System)</div>
-
-Capital is deployed across multiple accounts using a phase system that scales up as the track record builds.
-
-| Phase | Who Trades | Requirement |
-|-------|-----------|-------------|
-| **Phase 1** | Eval accounts only | Starting out -- free reps, build data |
-| **Phase 2** | Evals + funded on elite scores | 20+ trades, net positive |
-| **Phase 3** | All accounts active | 50+ trades, PF > 1.3 |
-| **Phase 4** | All accounts, max size | 100+ trades, PF > 1.5, weekly green |
-
-Higher scores unlock more accounts at each phase. Score 9+ deploys the most accounts;
-score 4-6 deploys fewer. This ensures maximum capital is only deployed on the highest-conviction setups.
+**Day eligibility:** TuThFr need score 4+, Mon/Wed need score 5+ (backtested PF 2.17 with elevated threshold).
 </div>
 """, unsafe_allow_html=True)
 
@@ -642,8 +502,8 @@ score 4-6 deploys fewer. This ensures maximum capital is only deployed on the hi
 - **Max 2 trades before 9:00 MT**, 3 total per day
 - **2 stops = done for the day** (Daily Loss Limit discipline)
 - **EOD flatten by 13:55 MT** -- no overnight risk on intraday trades
-- **DD safety**: Accounts below 25% remaining drawdown are frozen. Below 40% = elite scores only.
-- **Per-trade risk cap**: Max 20% of remaining drawdown per entry per account
+- **Round-robin deployment**: each trade rotates to the next account within each provider
+- **DD safety**: Accounts below critical DD thresholds get pulled from rotation
 </div>
 """, unsafe_allow_html=True)
 
@@ -651,5 +511,5 @@ score 4-6 deploys fewer. This ensures maximum capital is only deployed on the hi
 ---
 *This system combines mechanical execution (ORB) with discretionary trader reads (Set, Jay)
 and technical regime filtering (BB, EMA) to find high-probability, well-sized trades.
-Every component has been individually backtested against 2 years of data.*
+Every component has been individually backtested against 2+ years of data.*
 """)
