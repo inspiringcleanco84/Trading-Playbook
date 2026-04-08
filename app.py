@@ -317,19 +317,19 @@ with tab_playbook:
         st.subheader("📍 Level Map")
         if zones and cp:
             _cp_shown = False
-            for z in sorted(zones, key=lambda x: x["price"]):
+            for z in sorted(zones, key=lambda x: -x["price"]):
                 dist = z["price"] - cp
                 if abs(dist) > 100:
                     continue
+
+                if not _cp_shown and z["price"] < cp:
+                    st.markdown(f'<div style="background:#fbbf24;color:#000;text-align:center;padding:6px;border-radius:4px;font-weight:bold;">&#9654; CURRENT: {cp:.0f}</div>', unsafe_allow_html=True)
+                    _cp_shown = True
+
                 n_stars = zone_stars(z)
                 css = "zone-hot" if n_stars >= 4 else ("zone-warm" if n_stars >= 3 else "zone-cold")
                 roles = " | ".join([f"{s}:{r}" for s, r in z.get("roles", [])])
                 star_display = "\u2B50" * n_stars
-
-                if not _cp_shown and z["price"] > cp:
-                    st.markdown(f'<div style="background:#fbbf24;color:#000;text-align:center;padding:6px;border-radius:4px;font-weight:bold;">&#9654; CURRENT: {cp:.0f}</div>', unsafe_allow_html=True)
-                    _cp_shown = True
-
                 st.markdown(f'<div class="{css}"><b>{z["price"]:.0f}</b> {star_display} Wt:{z.get("weight",0)}<br><span style="font-size:0.8em;color:#9ca3af;">{roles}</span></div>', unsafe_allow_html=True)
 
             if not _cp_shown:
