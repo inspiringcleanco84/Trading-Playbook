@@ -319,7 +319,7 @@ with tab_playbook:
             _cp_shown = False
             for z in sorted(zones, key=lambda x: -x["price"]):
                 dist = z["price"] - cp
-                if abs(dist) > 100:
+                if abs(dist) > 300:
                     continue
 
                 if not _cp_shown and z["price"] < cp:
