@@ -167,14 +167,6 @@ with st.sidebar:
         st.caption(f"Session: {data.get('day', '')}, {data.get('date', '')}")
         st.caption(f"Last pull: {data.get('updated', '?')}")
 
-        # ---- Risk Settings ----
-        st.markdown(f"""<div class="sidebar-section">
-            <div class="sidebar-header">💰 Risk Settings</div>
-            {sidebar_row("Risk per trade idea", "$" + str(data.get("risk_per_trade", 200)))}
-            {sidebar_row("Set stop size", str(data.get("set_stop_size", 15)) + " pts")}
-            {sidebar_row("Min contracts", str(data.get("min_contracts", 2)))}
-        </div>""", unsafe_allow_html=True)
-
         # ---- Prior Day / Overnight ----
         st.markdown(f"""<div class="sidebar-section">
             <div class="sidebar-header">📈 Prior Day / Overnight</div>
