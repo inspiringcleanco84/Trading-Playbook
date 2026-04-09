@@ -2,8 +2,8 @@
 Public Trading Playbook Viewer (Read-Only)
 ==========================================
 Reads live playbook data from a GitHub Gist and displays it.
+Mirrors the local dashboard layout with a read-only sidebar.
 No account names, balances, DD, or deployment details.
-Matches the display and logic of dashboard_v2.py.
 """
 
 import streamlit as st
@@ -42,6 +42,12 @@ st.markdown("""
     .how-section { background: #111827; border: 1px solid #1f2937; border-radius: 8px;
                    padding: 16px 20px; margin: 8px 0; }
     .how-header { color: #10b981; font-size: 1.2em; font-weight: bold; margin-bottom: 8px; }
+    .sidebar-section { background: #111827; border: 1px solid #1f2937; border-radius: 6px;
+                       padding: 10px 12px; margin: 6px 0; font-size: 0.9em; }
+    .sidebar-header { color: #10b981; font-weight: bold; margin-bottom: 4px; }
+    .sidebar-row { display: flex; justify-content: space-between; padding: 2px 0; }
+    .sidebar-label { color: #9ca3af; }
+    .sidebar-value { color: #e5e7eb; font-weight: 500; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -68,10 +74,22 @@ def zone_stars(z):
     return 1
 
 
+def fmt(v, decimals=2):
+    """Format a number for display, handling None/0."""
+    if v is None or v == 0:
+        return "--"
+    return f"{float(v):,.{decimals}f}"
+
+
+def sidebar_row(label, value):
+    """Single label: value row for the sidebar."""
+    return f'<div class="sidebar-row"><span class="sidebar-label">{label}</span><span class="sidebar-value">{value}</span></div>'
+
+
 # ============================================================
 # Risk allocation logic — uses user's account DD
 # ============================================================
-RISK_PCT = 0.10  # 10% of remaining DD per trade idea (conservative baseline)
+RISK_PCT = 0.10
 
 def score_mult(score):
     if score >= 8: return 1.0
@@ -83,7 +101,6 @@ def conv_mult(conviction):
     return {"high": 1.0, "med": 0.7, "low": 0.4}.get(conviction, 0.4)
 
 def calc_account_risk(accounts, score, conviction):
-    """Calculate per-account risk from DD. Returns list of (acct, risk_$)."""
     sm = score_mult(score)
     cm = conv_mult(conviction)
     results = []
@@ -91,7 +108,6 @@ def calc_account_risk(accounts, score, conviction):
         dd = a.get("dd_remaining", 0)
         if dd <= 0:
             continue
-        # DD safety gating
         if dd < 200:
             results.append((a, 0, "FROZEN"))
             continue
@@ -104,7 +120,6 @@ def calc_account_risk(accounts, score, conviction):
     return results
 
 def render_risk_deploy_accounts(acct_risks):
-    """Render per-account risk deployment HTML."""
     if not acct_risks:
         return ('<div style="margin-top:8px;padding:10px;background:#1e293b;border-radius:6px;'
                 'font-size:0.9em;color:#9ca3af;text-align:center;">'
@@ -130,10 +145,149 @@ def render_risk_deploy_accounts(acct_risks):
 
 
 # ============================================================
-# ACCOUNTS — session state, persists across reruns
+# ACCOUNTS — session state
 # ============================================================
 if "user_accounts" not in st.session_state:
     st.session_state.user_accounts = []
+
+# ============================================================
+# FETCH DATA
+# ============================================================
+data = fetch_playbook()
+
+# ============================================================
+# SIDEBAR — read-only mirror of local dashboard inputs
+# ============================================================
+with st.sidebar:
+    st.title("📋 Daily Inputs")
+
+    if not data:
+        st.info("Waiting for playbook data...")
+    else:
+        st.caption(f"Session: {data.get('day', '')}, {data.get('date', '')}")
+        st.caption(f"Last pull: {data.get('updated', '?')}")
+
+        # ---- Risk Settings ----
+        st.markdown(f"""<div class="sidebar-section">
+            <div class="sidebar-header">💰 Risk Settings</div>
+            {sidebar_row("Risk per trade idea", "$" + str(data.get("risk_per_trade", 200)))}
+            {sidebar_row("Set stop size", str(data.get("set_stop_size", 15)) + " pts")}
+            {sidebar_row("Min contracts", str(data.get("min_contracts", 2)))}
+        </div>""", unsafe_allow_html=True)
+
+        # ---- Prior Day / Overnight ----
+        st.markdown(f"""<div class="sidebar-section">
+            <div class="sidebar-header">📈 Prior Day / Overnight</div>
+            {sidebar_row("Prior RTH High", fmt(data.get("prior_high")))}
+            {sidebar_row("Prior RTH Low", fmt(data.get("prior_low")))}
+            {sidebar_row("Prior RTH Close", fmt(data.get("prior_close")))}
+            {sidebar_row("Overnight High", fmt(data.get("ovn_high")))}
+            {sidebar_row("Overnight Low", fmt(data.get("ovn_low")))}
+            {sidebar_row("Current Price", fmt(data.get("current_price")))}
+        </div>""", unsafe_allow_html=True)
+
+        # ---- Set's Bias ----
+        sb = data.get("set_bias", "silent")
+        sc = data.get("set_conviction", "med")
+        set_journal = "✅" if data.get("set_journal") else "❌"
+        set_swing = "✅" if data.get("set_swing") else "❌"
+        st.markdown(f"""<div class="sidebar-section">
+            <div class="sidebar-header">🎯 Set's Bias</div>
+            {sidebar_row("Bias", sb.upper())}
+            {sidebar_row("Conviction", sc.upper())}
+            {sidebar_row("Pivot", fmt(data.get("set_pivot")))}
+            {sidebar_row("Support", data.get("set_support", "--") or "--")}
+            {sidebar_row("Resistance", data.get("set_resistance", "--") or "--")}
+            {sidebar_row("Long targets", data.get("set_long_targets", "--") or "--")}
+            {sidebar_row("Short targets", data.get("set_short_targets", "--") or "--")}
+            {sidebar_row("Journal active", set_journal)}
+            {sidebar_row("Active swing", set_swing)}
+            {sidebar_row("Keywords", data.get("set_keywords", "--") or "--")}
+        </div>""", unsafe_allow_html=True)
+
+        # ---- Jay's Bias ----
+        jb = data.get("jay_bias", "none")
+        jc = data.get("jay_conviction", "med")
+        jd = data.get("jay_dom", "none")
+        jdc = data.get("jay_dom_conviction", "med")
+        st.markdown(f"""<div class="sidebar-section">
+            <div class="sidebar-header">🎙️ Jay's Bias</div>
+            {sidebar_row("VP Bias", jb.upper())}
+            {sidebar_row("VP Conviction", jc.upper())}
+            {sidebar_row("DOM Read", jd.upper())}
+            {sidebar_row("DOM Conviction", jdc.upper())}
+            {sidebar_row("Key levels", data.get("jay_levels", "--") or "--")}
+            {sidebar_row("Stop size", str(data.get("jay_stop", 4)) + " pts")}
+        </div>""", unsafe_allow_html=True)
+        if data.get("jay_notes"):
+            st.caption(f"Jay's notes: {data['jay_notes']}")
+
+        # ---- Daily Plan ----
+        st.markdown(f"""<div class="sidebar-section">
+            <div class="sidebar-header">📋 Daily Plan</div>
+            {sidebar_row("Trend Up", fmt(data.get("plan_tu")))}
+            {sidebar_row("Resistance", fmt(data.get("plan_r")))}
+            {sidebar_row("Bull Pivot", fmt(data.get("plan_bp")))}
+            {sidebar_row("Bear Pivot", fmt(data.get("plan_brp")))}
+            {sidebar_row("Support", fmt(data.get("plan_s")))}
+            {sidebar_row("Trend Down", fmt(data.get("plan_td")))}
+        </div>""", unsafe_allow_html=True)
+
+        # ---- Bollinger Bands ----
+        bbu = data.get("bb_upper_today", 0)
+        bbl = data.get("bb_lower_today", 0)
+        bbu_p = data.get("bb_upper_prior", 0)
+        bbl_p = data.get("bb_lower_prior", 0)
+        w_today = round(bbu - bbl, 1) if bbu and bbl else 0
+        w_prior = round(bbu_p - bbl_p, 1) if bbu_p and bbl_p else 0
+        bb_regime = data.get("bb_regime", "?")
+        regime_icon = {"SQUEEZE": "🟡", "BREAKOUT": "🟢", "TRENDING": "🟢", "WIDE PULLBACK": "🟠", "EXHAUSTION": "🔴"}.get(bb_regime, "⚪")
+        st.markdown(f"""<div class="sidebar-section">
+            <div class="sidebar-header">📉 Bollinger Bands (1hr ES)</div>
+            {sidebar_row("Upper (today)", fmt(bbu))}
+            {sidebar_row("Lower (today)", fmt(bbl))}
+            {sidebar_row("Upper (prior)", fmt(bbu_p))}
+            {sidebar_row("Lower (prior)", fmt(bbl_p))}
+            {sidebar_row("Width today", f"{w_today:.1f} pt")}
+            {sidebar_row("Width prior", f"{w_prior:.1f} pt")}
+            {sidebar_row("Regime", f"{regime_icon} {bb_regime}")}
+        </div>""", unsafe_allow_html=True)
+
+        # ---- EMAs ----
+        ema_20 = data.get("ema_20", 0)
+        ema_50 = data.get("ema_50", 0)
+        ema_200 = data.get("ema_200", 0)
+        ema_struct = data.get("ema_structure", "?")
+        ema_icon = {"BULL STACK": "🟢", "BEAR STACK": "🔴", "MIXED": "🟡"}.get(ema_struct, "⚪")
+        st.markdown(f"""<div class="sidebar-section">
+            <div class="sidebar-header">📉 EMAs (1hr ES)</div>
+            {sidebar_row("EMA 20", fmt(ema_20))}
+            {sidebar_row("EMA 50", fmt(ema_50))}
+            {sidebar_row("EMA 200", fmt(ema_200))}
+            {sidebar_row("Structure", f"{ema_icon} {ema_struct}")}
+        </div>""", unsafe_allow_html=True)
+
+        # ---- Volume Profile ----
+        vp_html = f"""<div class="sidebar-section">
+            <div class="sidebar-header">📊 Volume Profile</div>
+            <div style="color:#9ca3af;font-size:0.85em;margin:2px 0;">Daily</div>
+            {sidebar_row("POC", fmt(data.get("vp_poc")))}
+            {sidebar_row("VAH", fmt(data.get("vp_vah")))}
+            {sidebar_row("VAL", fmt(data.get("vp_val")))}
+            <div style="color:#9ca3af;font-size:0.85em;margin:2px 0;">Weekly</div>
+            {sidebar_row("W-POC", fmt(data.get("vp_w_poc")))}
+            {sidebar_row("W-VAH", fmt(data.get("vp_w_vah")))}
+            {sidebar_row("W-VAL", fmt(data.get("vp_w_val")))}
+            <div style="color:#9ca3af;font-size:0.85em;margin:2px 0;">Monthly</div>
+            {sidebar_row("M-POC", fmt(data.get("vp_m_poc")))}
+            {sidebar_row("M-VAH", fmt(data.get("vp_m_vah")))}
+            {sidebar_row("M-VAL", fmt(data.get("vp_m_val")))}
+            <div style="color:#9ca3af;font-size:0.85em;margin:2px 0;">YTD</div>
+            {sidebar_row("Y-POC", fmt(data.get("vp_y_poc")))}
+            {sidebar_row("Y-VAH", fmt(data.get("vp_y_vah")))}
+            {sidebar_row("Y-VAL", fmt(data.get("vp_y_val")))}
+        </div>"""
+        st.markdown(vp_html, unsafe_allow_html=True)
 
 # ============================================================
 # TABS
@@ -145,8 +299,6 @@ tab_playbook, tab_accounts, tab_how = st.tabs(["📊 Live Playbook", "💼 My Ac
 # TAB 1: LIVE PLAYBOOK
 # ============================================================
 with tab_playbook:
-    data = fetch_playbook()
-
     if not data:
         st.warning("Playbook not loaded. Check back when the market is open.")
         st.info("The playbook updates live throughout the trading session as new data comes in.")
@@ -156,7 +308,7 @@ with tab_playbook:
     st.caption(f"{data.get('day', '')}, {data.get('date', '')} | {data.get('phase', '')}")
     st.markdown(f'<div style="text-align:right;color:#9ca3af;font-size:0.85em;margin-top:-10px;">Last Updated: <b>{data.get("updated", "?")}</b></div>', unsafe_allow_html=True)
 
-    # Metrics row — matches local dashboard
+    # Metrics row
     total = data.get("total_score", 0)
     ss = data.get("set_score", 0)
     js = data.get("jay_score", 0)
@@ -203,15 +355,22 @@ with tab_playbook:
             st.metric("Gap", "--")
 
     # BB Regime banner
+    bb_w_today = data.get("bb_width_today", 0)
+    bb_w_prior = data.get("bb_width_prior", 0)
+    bb_desc = data.get("bb_desc", "")
     rc = "score-high" if bb_orb_signal == "GO" else ("score-skip" if bb_orb_signal == "SKIP" else "score-med")
-    st.markdown(f'<div class="{rc}" style="text-align:center;font-size:1.1em;"><b>BB REGIME: {bb_regime}</b> -- {data.get("bb_desc","")}</div>', unsafe_allow_html=True)
+    bb_detail = f"Width: {bb_w_today:.1f}pt"
+    if bb_w_prior:
+        pct = ((bb_w_today - bb_w_prior) / bb_w_prior * 100) if bb_w_prior else 0
+        bb_detail += f", {pct:+.1f}% from prior"
+    st.markdown(f'<div class="{rc}" style="text-align:center;font-size:1.1em;"><b>BB REGIME: {bb_regime}</b> — {bb_detail} — {bb_desc}</div>', unsafe_allow_html=True)
 
-    # Deployment summary (public: count only, no account names)
+    # Deployment summary
     n_active = data.get("n_accounts_active", 0)
     deploy_css = "score-high" if n_active >= 5 else ("score-med" if n_active >= 3 else "score-low")
     st.markdown(f'<div class="{deploy_css}" style="text-align:center;"><b>DEPLOYMENT: {n_active} accounts active</b> | Score: {total}</div>', unsafe_allow_html=True)
 
-    # Pre-compute account risks for each trade idea
+    # Pre-compute account risks
     user_accts = st.session_state.user_accounts
     has_accounts = len(user_accts) > 0
 
@@ -344,7 +503,7 @@ with tab_playbook:
         st.text("")
         st.subheader("📏 Rules")
         st.markdown(f"""
-        - **Min score ORB**: {orb_min_score} | **Set**: 7 | **Jay**: always eligible
+        - **Min score ORB**: {data.get('orb_min_score', 4)} | **Set**: 7 | **Jay**: always eligible
         - **BB regime**: {bb_regime} -- ORB {bb_orb_signal}
         - **Accounts active**: {n_active} (score {total})
         - ORB: Mon-Fri 7:30-9:00 MT (Mon/Wed need score 5+, TuThFr need 4+)
@@ -366,7 +525,6 @@ with tab_accounts:
     st.title("💼 My Accounts")
     st.caption("Add your prop/eval accounts to get personalized deployment recommendations on each trade idea.")
 
-    # Add account form
     with st.expander("➕ Add Account", expanded=len(st.session_state.user_accounts) == 0):
         with st.form("add_account", clear_on_submit=True):
             c1, c2, c3 = st.columns(3)
@@ -392,7 +550,6 @@ with tab_accounts:
         for i, acct in enumerate(st.session_state.user_accounts):
             dd = acct["dd_remaining"]
             icon = {"Tradeify": "🟠", "TopStepX": "🔵", "Apex": "🟣"}.get(acct.get("provider", ""), "⚪")
-            # DD health
             if dd < 200: health = "⛔ FROZEN"
             elif dd < 500: health = "🔴 DANGER"
             elif dd < 1000: health = "⚠️ CAUTION"
@@ -413,7 +570,6 @@ with tab_accounts:
                     st.rerun()
 
         st.divider()
-        # Summary
         total_dd = sum(a["dd_remaining"] for a in st.session_state.user_accounts)
         healthy = sum(1 for a in st.session_state.user_accounts if a["dd_remaining"] >= 500)
         c1, c2, c3 = st.columns(3)
@@ -513,10 +669,12 @@ plus real-time Discord journal entries during the session.
 **His vocabulary:**
 - **Makeba** = bearish / markets going down
 - **KiKi** = bullish / markets going up
+- **Unreasonable Lift** = very high bull conviction, expects outsized upside move
 - **Coin Coma** = made a huge amount of money
 - **DLL** = Daily Loss Limit (he stops trading when hit)
 - **Full Clip** = maximum position size, highest conviction
 - **Gone Shopping** = aggressively adding to position
+- **Bubbly** = market frothy/extended, expects pullback not reversal
 
 **His levels as S/R zones:** Backtested at 66.7% bounce rate overall, 83.8% at resistance levels.
 Over 2 years: 65.6% win rate, 1.98 win/loss ratio on 1,704 journal entries across 321 trading days.
