@@ -281,6 +281,30 @@ with st.sidebar:
         </div>"""
         st.markdown(vp_html, unsafe_allow_html=True)
 
+    # ---- OFB Alert Status (read-only mirror) ----
+    if data:
+        _sb_ofb_summary = data.get("ofb_session_summary", {}) or {}
+        _sb_ofb_count = _sb_ofb_summary.get("count", 0)
+        if _sb_ofb_count > 0:
+            _sb_bias = _sb_ofb_summary.get("bias", "?")
+            _sb_bias_color = "#ef4444" if _sb_bias == "SHORT" else ("#22c55e" if _sb_bias == "LONG" else "#94a3b8")
+            _sb_mins = _sb_ofb_summary.get("minutes_ago")
+            ofb_html = f"""<div class="sidebar-section">
+                <div class="sidebar-header">🔔 OFB Today</div>
+                {sidebar_row("Total alerts", str(_sb_ofb_count))}
+                {sidebar_row("Longs", str(_sb_ofb_summary.get("long_count", 0)))}
+                {sidebar_row("Shorts", str(_sb_ofb_summary.get("short_count", 0)))}
+                {sidebar_row("Bias", f'<span style="color:{_sb_bias_color};font-weight:bold;">{_sb_bias}</span>')}
+                {sidebar_row("Last alert", f'{_sb_mins}min ago' if _sb_mins is not None else '--')}
+                {sidebar_row("Warning alerts", str(_sb_ofb_summary.get("warning_count", 0)))}
+            </div>"""
+            st.markdown(ofb_html, unsafe_allow_html=True)
+        else:
+            st.markdown("""<div class="sidebar-section">
+                <div class="sidebar-header">🔔 OFB Today</div>
+                <div style="color:#64748b;font-size:0.85em;padding:4px 0;">No alerts logged today</div>
+            </div>""", unsafe_allow_html=True)
+
 # ============================================================
 # TABS
 # ============================================================
@@ -441,6 +465,74 @@ with tab_playbook:
                 {jay_deploy}</div>""", unsafe_allow_html=True)
         elif jb in ["bull", "bear"]:
             st.markdown(f'<div class="score-skip">🔴 JAY TRADE: <b>SKIP</b> -- no conviction (Jay {js}/4)</div>', unsafe_allow_html=True)
+
+        # ---- OFB SHORT TRADE IDEA ----
+        # Standalone NQ SHORT Score 7+ trade idea, mirrored from local dashboard via gist.
+        # Validated via 2-year backtest: 145 trades, PF 1.65 fixed / 1.76 trailing.
+        ofb_idea = data.get("ofb_trade_idea", {}) or {}
+        ofb_summary = data.get("ofb_session_summary", {}) or {}
+        ofb_today_alerts = data.get("ofb_alerts_today", []) or []
+
+        if ofb_idea.get("active"):
+            _entry = ofb_idea["entry"]
+            _score = ofb_idea["score"]
+            _conv = ofb_idea["conviction"]
+            _mins = ofb_idea["minutes_ago"]
+            _cts = ofb_idea["contracts"]
+            _risk = ofb_idea["actual_risk"]
+            _stop = ofb_idea["stop"]
+            _2r = ofb_idea["target_2r"]
+            _3r = ofb_idea["target_3r"]
+            _5r = ofb_idea["target_5r"]
+
+            # Compute per-account risk breakdown if user has accounts entered
+            ofb_risks = calc_account_risk(user_accts, _score, _conv) if has_accounts else []
+            ofb_deploy = render_risk_deploy_accounts(ofb_risks)
+
+            ofb_css = "score-high" if _score >= 9 else "score-med"
+            st.markdown(f"""<div class="{ofb_css}">
+                <b>🔻 OFB SHORT (NQ)</b> -- Alert {_mins}min ago | Score {_score} | Conv: {_conv.upper()}
+                <table style="width:100%;font-size:0.9em;margin-top:6px;">
+                <tr><td style="color:#9ca3af;width:80px;">Entry</td><td><b>{_entry:.2f}</b> (alert price)</td>
+                    <td style="color:#9ca3af;width:80px;">Stop</td><td><b>{_stop:.2f}</b> (80pt above)</td></tr>
+                <tr><td style="color:#9ca3af;">Contracts</td><td><b>{_cts} MNQ</b> ({_risk:.0f} $ actual risk)</td>
+                    <td style="color:#9ca3af;">Flatten</td><td>14:00 MT (RTH close)</td></tr>
+                <tr><td style="color:#9ca3af;">2R target</td><td>{_2r:.2f}</td>
+                    <td style="color:#9ca3af;">3R target</td><td>{_3r:.2f}</td></tr>
+                <tr><td style="color:#9ca3af;">5R target</td><td>{_5r:.2f}</td>
+                    <td style="color:#9ca3af;">Scheme</td><td>FIXED (1/3 2R, 1/3 3R, 1/3 5R) or TRAIL 40pt after 2R</td></tr>
+                </table>
+                {ofb_deploy}</div>""", unsafe_allow_html=True)
+            st.caption("Validated edge: 145-trade backtest, PF 1.65 fixed / 1.76 trailing, both temporal halves > 1.5.")
+        elif ofb_summary.get("count", 0) > 0:
+            # Show session state even if no qualifying idea
+            _bias_color = "#ef4444" if ofb_summary.get("bias") == "SHORT" else ("#22c55e" if ofb_summary.get("bias") == "LONG" else "#94a3b8")
+            st.markdown(
+                f'<div style="padding:8px 12px;background:#0f172a;border-left:3px solid #475569;border-radius:4px;font-size:0.9em;color:#cbd5e1;margin:6px 0;">'
+                f'📡 <b>OFB today:</b> {ofb_summary.get("count", 0)} alerts '
+                f'({ofb_summary.get("long_count", 0)} long, {ofb_summary.get("short_count", 0)} short) | '
+                f'<span style="color:{_bias_color};font-weight:bold;">Bias: {ofb_summary.get("bias", "?")}</span>'
+                + (f' | Last: {ofb_summary.get("minutes_ago")}min ago' if ofb_summary.get("minutes_ago") is not None else "")
+                + ' | <span style="color:#64748b;">No qualifying NQ SHORT Score 7+ signal</span>'
+                '</div>',
+                unsafe_allow_html=True,
+            )
+
+        # ---- OFB ACTIVITY LOG (all of today's alerts) ----
+        if ofb_today_alerts:
+            with st.expander(f"📡 OFB alerts today ({len(ofb_today_alerts)})", expanded=False):
+                for a in reversed(ofb_today_alerts[-20:]):  # most recent 20, newest first
+                    _a_time = datetime.fromisoformat(a["timestamp"]).strftime("%H:%M")
+                    _a_color = "#ef4444" if a["direction"] == "short" else "#22c55e"
+                    _a_warn = " &#x26A0;" if a.get("warning_flag") else ""
+                    _a_score = f" &middot; Sc{a['playbook_score']}" if a.get("playbook_score") is not None else ""
+                    st.markdown(
+                        f'<div style="font-size:0.9em;color:#cbd5e1;padding:4px 8px;border-left:3px solid {_a_color};margin:3px 0;background:#0f172a;border-radius:3px;">'
+                        f'<b>{_a_time}</b> &middot; <b style="color:{_a_color};">{a["symbol"]} {a["direction"].upper()}</b> '
+                        f'@ {a["price"]:.2f}{_a_score}{_a_warn}'
+                        f'</div>',
+                        unsafe_allow_html=True,
+                    )
 
         # ---- BOUNCE ZONES ----
         if zones and cp:
