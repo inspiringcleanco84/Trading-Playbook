@@ -412,6 +412,7 @@ with tab_playbook:
             sizing_label = f"BB: {bb_regime} + EMA: {ema_structure}"
             st.markdown(f"""<div class="score-high">
                 <b>🟢 MNQ ORB BREAKOUT</b> -- {day}{mw_label} | Score {total} | Direction: {orb_dir} favored<br>
+                <span style="font-size:0.85em;background:#92400e;color:#fef3c7;padding:2px 8px;border-radius:4px;"><b>ONLY TRADE IF OPENING RANGE IS 20-100 PTS</b></span><br>
                 <span style="font-size:0.9em;color:#fbbf24;"><b>SIZING: {sizing_label}</b></span>
                 <table style="width:100%;font-size:0.9em;margin-top:6px;">
                 <tr><td style="color:#9ca3af;width:80px;">Entry</td><td>15-min range break (7:45 MT)</td>
